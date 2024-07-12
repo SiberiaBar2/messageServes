@@ -17,5 +17,8 @@
   },
   "devDependencies": {
     "module-alias": "^2.2.3"
+  },
+  "engines": {
+    "node": ">=20.0.0"
   }
 }
