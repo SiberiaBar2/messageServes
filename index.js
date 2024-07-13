@@ -25,46 +25,27 @@ let db = new sqlite3.Database(path.resolve(__dirname, "message.db"), (err) => {
 });
 
 // 创建表（如果不存在）
-db.serialize(() => {
-  db.run(`CREATE TABLE IF NOT EXISTS level1 (
-        id INTEGER PRIMARY KEY,
-        name TEXT NOT NULL
-    )`);
-  db.run(`CREATE TABLE IF NOT EXISTS level2 (
-        id INTEGER PRIMARY KEY,
-        level1_id INTEGER,
-        name TEXT NOT NULL,
-        FOREIGN KEY (level1_id) REFERENCES level1(id)
-    )`);
-  db.run(`CREATE TABLE IF NOT EXISTS level3 (
-        id INTEGER PRIMARY KEY,
-        level2_id INTEGER,
-        name TEXT NOT NULL,
-        FOREIGN KEY (level2_id) REFERENCES level2(id)
-    )`);
-  db.run(`CREATE TABLE IF NOT EXISTS level4 (
-        id INTEGER PRIMARY KEY,
-        level3_id INTEGER,
-        name TEXT NOT NULL,
-        FOREIGN KEY (level3_id) REFERENCES level3(id)
-    )`);
-  db.run(`CREATE TABLE IF NOT EXISTS level5 (
-        id INTEGER PRIMARY KEY,
-        level4_id INTEGER,
-        name TEXT NOT NULL,
-        FOREIGN KEY (level4_id) REFERENCES level4(id)
-    )`);
-  db.run(`CREATE TABLE IF NOT EXISTS level6 (
-        id INTEGER PRIMARY KEY,
-        level5_id INTEGER,
-        name TEXT NOT NULL,
-        FOREIGN KEY (level5_id) REFERENCES level5(id)
-    )`);
-});
+const createTable = (level) => {
+  const foreignKey = level > 1 ? `level${level - 1}_id` : null;
+  const tableDefinition = `
+    CREATE TABLE IF NOT EXISTS level${level} (
+      id INTEGER PRIMARY KEY,
+      ${foreignKey ? `${foreignKey} INTEGER,` : ""}
+      name TEXT NOT NULL
+      ${foreignKey ? `, FOREIGN KEY (${foreignKey}) REFERENCES level${level - 1}(id)` : ""}
+    )
+  `;
+  db.run(tableDefinition);
+};
+
+// 动态创建层级表
+for (let i = 1; i <= 10; i++) { // 假设最多支持10层
+  createTable(i);
+}
 
 // 递归更新或插入嵌套数据
 function upsertNestedData(level, parentId, data, callback) {
-  if (level > 6 || !data || !data.name) {
+  if (!data || !data.name) {
     return callback(null);
   }
 
@@ -133,49 +114,53 @@ function upsertChildren(level, parentId, children, callback) {
 }
 
 // 递归获取树形数据
-function getTreeData(parentId = null) {
+function getTreeData(level, parentId = null) {
   return new Promise((resolve, reject) => {
-    db.all(
-      `SELECT * FROM tree WHERE parent_id ${
-        parentId === null ? "IS NULL" : "= ?"
-      }`,
-      [parentId],
-      (err, rows) => {
-        if (err) {
-          reject(err);
-        } else {
-          let tree = [];
-          rows.forEach((row) => {
-            tree.push({
-              id: row.id,
-              name: row.name,
-              children: [],
-            });
+    const table = `level${level}`;
+    const foreignKey = level > 1 ? `level${level - 1}_id` : null;
+
+    let query = `SELECT * FROM ${table} WHERE ${foreignKey} IS NULL`;
+    let params = [];
+    if (foreignKey && parentId !== null) {
+      query = `SELECT * FROM ${table} WHERE ${foreignKey} = ?`;
+      params = [parentId];
+    }
+
+    db.all(query, params, (err, rows) => {
+      if (err) {
+        reject(err);
+      } else {
+        let tree = [];
+        rows.forEach((row) => {
+          tree.push({
+            id: row.id,
+            name: row.name,
+            children: [],
           });
-          // 递归获取子节点
-          Promise.all(
-            tree.map((node) =>
-              getTreeData(node.id).then((children) => {
-                node.children = children;
-              })
-            )
-          )
-            .then(() => {
-              resolve(tree);
+        });
+        // 递归获取子节点
+        Promise.all(
+          tree.map((node) =>
+            getTreeData(level + 1, node.id).then((children) => {
+              node.children = children;
             })
-            .catch((err) => {
-              reject(err);
-            });
-        }
+          )
+        )
+          .then(() => {
+            resolve(tree);
+          })
+          .catch((err) => {
+            reject(err);
+          });
       }
-    );
+    });
   });
 }
 
 // 获取所有树形数据
 app.get("/api/tree", async (req, res) => {
   try {
-    const treeData = await getTreeData();
+    const treeData = await getTreeData(1);
     res.json({ treeData });
   } catch (err) {
     res.status(500).json({ error: err.message });

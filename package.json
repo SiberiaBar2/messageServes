@@ -8,7 +8,7 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "postinstall": "chmod 664 message.db && chmod 775 message.db"
   },
-  "author": "",
+  "author": "franz",
   "license": "ISC",
   "dependencies": {
     "body-parser": "^1.20.2",
