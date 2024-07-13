@@ -16,7 +16,10 @@ app.get("/", (req, res) => {
   res.sendFile(__dirname + "/index.html"); // 发送 HTML 文件
 });
 
-let db = new sqlite3.Database(path.resolve(__dirname, "message.db"), (err) => {
+// 动态设置数据库文件路径
+const dbFile = process.env.VERCEL ? '/tmp/message.db' : path.resolve(__dirname, "message.db");
+
+let db = new sqlite3.Database(dbFile, (err) => {
   if (err) {
     console.error("数据库连接失败：", err.message);
   } else {
