@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node ./index.js",
     "test": "echo \"Error: no test specified\" && exit 1",
-    "postinstall": "chmod 664 message.db && chmod 775 message.db"
+    "postinstall": "chmod 775 message.db"
   },
   "author": "franz",
   "license": "ISC",
