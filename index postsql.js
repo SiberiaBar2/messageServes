@@ -1,10 +1,10 @@
 const express = require("express");
 const cors = require("cors");
 require('dotenv').config();
-const { createClient } = require('@supabase/supabase-js');
+
+const { Pool } = require("pg");
 const bodyParser = require("body-parser");
 const path = require("path");
-
 const app = express();
 const port = 3004;
 
@@ -16,10 +16,14 @@ app.get("/", (req, res) => {
   res.sendFile(__dirname + "/index.html"); // 发送 HTML 文件
 });
 
-// 创建 Supabase 客户端
-const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseKey = process.env.SUPABASE_ANON_KEY;
-const supabase = createClient(supabaseUrl, supabaseKey);
+// 创建 PostgreSQL 连接池
+const pool = new Pool({
+  user: 'root',
+  host: '3004',
+  database: 'message.db',
+  password: 'karl',
+  port: 5437, // 默认的 PostgreSQL 端口
+});
 
 // 创建表（如果不存在）
 const createTable = async (level) => {
@@ -32,7 +36,7 @@ const createTable = async (level) => {
       ${foreignKey ? `, FOREIGN KEY (${foreignKey}) REFERENCES level${level - 1}(id)` : ""}
     )
   `;
-  await supabase.rpc('execute_sql', { sql: tableDefinition });
+  await pool.query(tableDefinition);
 };
 
 // 动态创建层级表
@@ -59,18 +63,18 @@ async function upsertNestedData(level, parentId, data) {
     queryParams.push(parentId);
   }
 
-  const res = await supabase.from(table).select('id').eq('name', data.name).eq(foreignKey, parentId);
-  if (res.data.length > 0) {
+  const res = await pool.query(query, queryParams);
+  if (res.rows.length > 0) {
     // 如果存在，更新它
     const updateQuery = `UPDATE ${table} SET name = $1 WHERE id = $2`;
-    await supabase.from(table).update({ name: data.name }).eq('id', res.data[0].id);
-    const newId = res.data[0].id;
+    await pool.query(updateQuery, [data.name, res.rows[0].id]);
+    const newId = res.rows[0].id;
     await upsertChildren(level + 1, newId, data.children);
   } else {
     // 如果不存在，插入新数据
     const insertQuery = `INSERT INTO ${table} (${columns}) VALUES (${values.map((_, i) => `$${i + 1}`).join(", ")}) RETURNING id`;
-    const insertRes = await supabase.from(table).insert({ name: data.name, [foreignKey]: parentId }).select('id');
-    const newId = insertRes.data[0].id;
+    const insertRes = await pool.query(insertQuery, values);
+    const newId = insertRes.rows[0].id;
     await upsertChildren(level + 1, newId, data.children);
   }
 }
@@ -90,15 +94,15 @@ async function getTreeData(level, parentId = null) {
   const table = `level${level}`;
   const foreignKey = level > 1 ? `level${level - 1}_id` : null;
 
-  let query = supabase.from(table).select('*');
+  let query = `SELECT * FROM ${table} WHERE ${foreignKey} IS NULL`;
+  let params = [];
   if (foreignKey && parentId !== null) {
-    query = query.eq(foreignKey, parentId);
-  } else if (!foreignKey) {
-    query = query.isNull(foreignKey);
+    query = `SELECT * FROM ${table} WHERE ${foreignKey} = $1`;
+    params = [parentId];
   }
 
-  const res = await query;
-  const tree = await Promise.all(res.data.map(async (row) => {
+  const res = await pool.query(query, params);
+  const tree = await Promise.all(res.rows.map(async (row) => {
     const children = await getTreeData(level + 1, row.id);
     return {
       id: row.id,
