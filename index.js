@@ -3,7 +3,6 @@ const cors = require("cors");
 require('dotenv').config();
 const { createClient } = require('@supabase/supabase-js');
 const bodyParser = require("body-parser");
-const path = require("path");
 
 const app = express();
 const port = 3004;
@@ -48,8 +47,6 @@ async function upsertNestedData(level, parentId, data) {
 
   const table = `level${level}`;
   const foreignKey = level > 1 ? `level${level - 1}_id` : null;
-  const columns = foreignKey ? `${foreignKey}, name` : `name`;
-  const values = foreignKey ? [parentId, data.name] : [data.name];
 
   // 检查是否已存在
   let query = `SELECT id FROM ${table} WHERE name = $1`;
@@ -62,13 +59,11 @@ async function upsertNestedData(level, parentId, data) {
   const res = await supabase.from(table).select('id').eq('name', data.name).eq(foreignKey, parentId);
   if (res.data.length > 0) {
     // 如果存在，更新它
-    const updateQuery = `UPDATE ${table} SET name = $1 WHERE id = $2`;
     await supabase.from(table).update({ name: data.name }).eq('id', res.data[0].id);
     const newId = res.data[0].id;
     await upsertChildren(level + 1, newId, data.children);
   } else {
     // 如果不存在，插入新数据
-    const insertQuery = `INSERT INTO ${table} (${columns}) VALUES (${values.map((_, i) => `$${i + 1}`).join(", ")}) RETURNING id`;
     const insertRes = await supabase.from(table).insert({ name: data.name, [foreignKey]: parentId }).select('id');
     const newId = insertRes.data[0].id;
     await upsertChildren(level + 1, newId, data.children);
@@ -91,6 +86,7 @@ async function getTreeData(level, parentId = null) {
   const foreignKey = level > 1 ? `level${level - 1}_id` : null;
 
   let query = supabase.from(table).select('*');
+
   if (foreignKey && parentId !== null) {
     query = query.eq(foreignKey, parentId);
   } else if (!foreignKey) {
