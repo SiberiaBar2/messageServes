@@ -1,9 +1,10 @@
 const express = require("express");
 const cors = require("cors");
-require('dotenv').config();
-const { createClient } = require('@supabase/supabase-js');
-const bodyParser = require("body-parser");
+require("dotenv").config();
 
+const { Pool } = require("pg");
+const bodyParser = require("body-parser");
+const path = require("path");
 const app = express();
 const port = 3004;
 
@@ -15,10 +16,29 @@ app.get("/", (req, res) => {
   res.sendFile(__dirname + "/index.html"); // 发送 HTML 文件
 });
 
-// 创建 Supabase 客户端
-const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseKey = process.env.SUPABASE_ANON_KEY;
-const supabase = createClient(supabaseUrl, supabaseKey);
+const connectionString =
+  "postgresql://postgres.bswwoqwjolxtpjnzyxxf:%5BCMjzbC6R%40%23%21K5BX%5D@aws-0-ap-southeast-1.pooler.supabase.com:6543/postgres";
+// 创建 PostgreSQL 连接池
+const pool = new Pool({
+  // connectionString: connectionString,
+  user: "postgres.bswwoqwjolxtpjnzyxxf",
+  host: "aws-0-ap-southeast-1.pooler.supabase.com",
+  database: "postgres",
+  password: "CMjzbC6R@#!K5BX",
+  port: 6543,
+  ssl: {
+    rejectUnauthorized: false,
+    // sslmode: "require",
+    // require: true
+  },
+});
+// const pool = new Pool({
+//   user: 'postgres.bswwoqwjolxtpjnzyxxf',
+//   host: 'aws-0-ap-southeast-1.pooler.supabase.com',
+//   database: 'postgres.db',
+//   password: '%5BCMjzbC6R%40%23%21K5BX%5D',
+//   port: 5432, // 默认的 PostgreSQL 端口
+// });
 
 // 创建表（如果不存在）
 const createTable = async (level) => {
@@ -28,14 +48,19 @@ const createTable = async (level) => {
       id SERIAL PRIMARY KEY,
       ${foreignKey ? `${foreignKey} INTEGER,` : ""}
       name TEXT NOT NULL
-      ${foreignKey ? `, FOREIGN KEY (${foreignKey}) REFERENCES level${level - 1}(id)` : ""}
+      ${
+        foreignKey
+          ? `, FOREIGN KEY (${foreignKey}) REFERENCES level${level - 1}(id)`
+          : ""
+      }
     )
   `;
-  await supabase.rpc('execute_sql', { sql: tableDefinition });
+  await pool.query(tableDefinition);
 };
 
 // 动态创建层级表
-for (let i = 1; i <= 10; i++) { // 假设最多支持10层
+for (let i = 1; i <= 10; i++) {
+  // 假设最多支持10层
   createTable(i);
 }
 
@@ -47,6 +72,8 @@ async function upsertNestedData(level, parentId, data) {
 
   const table = `level${level}`;
   const foreignKey = level > 1 ? `level${level - 1}_id` : null;
+  const columns = foreignKey ? `${foreignKey}, name` : `name`;
+  const values = foreignKey ? [parentId, data.name] : [data.name];
 
   // 检查是否已存在
   let query = `SELECT id FROM ${table} WHERE name = $1`;
@@ -56,16 +83,20 @@ async function upsertNestedData(level, parentId, data) {
     queryParams.push(parentId);
   }
 
-  const res = await supabase.from(table).select('id').eq('name', data.name).eq(foreignKey, parentId);
-  if (res.data.length > 0) {
+  const res = await pool.query(query, queryParams);
+  if (res.rows.length > 0) {
     // 如果存在，更新它
-    await supabase.from(table).update({ name: data.name }).eq('id', res.data[0].id);
-    const newId = res.data[0].id;
+    const updateQuery = `UPDATE ${table} SET name = $1 WHERE id = $2`;
+    await pool.query(updateQuery, [data.name, res.rows[0].id]);
+    const newId = res.rows[0].id;
     await upsertChildren(level + 1, newId, data.children);
   } else {
     // 如果不存在，插入新数据
-    const insertRes = await supabase.from(table).insert({ name: data.name, [foreignKey]: parentId }).select('id');
-    const newId = insertRes.data[0].id;
+    const insertQuery = `INSERT INTO ${table} (${columns}) VALUES (${values
+      .map((_, i) => `$${i + 1}`)
+      .join(", ")}) RETURNING id`;
+    const insertRes = await pool.query(insertQuery, values);
+    const newId = insertRes.rows[0].id;
     await upsertChildren(level + 1, newId, data.children);
   }
 }
@@ -85,23 +116,24 @@ async function getTreeData(level, parentId = null) {
   const table = `level${level}`;
   const foreignKey = level > 1 ? `level${level - 1}_id` : null;
 
-  let query = supabase.from(table).select('*');
-
+  let query = `SELECT * FROM ${table} WHERE ${foreignKey} IS NULL`;
+  let params = [];
   if (foreignKey && parentId !== null) {
-    query = query.eq(foreignKey, parentId);
-  } else if (!foreignKey) {
-    query = query.isNull(foreignKey);
+    query = `SELECT * FROM ${table} WHERE ${foreignKey} = $1`;
+    params = [parentId];
   }
 
-  const res = await query;
-  const tree = await Promise.all(res.data.map(async (row) => {
-    const children = await getTreeData(level + 1, row.id);
-    return {
-      id: row.id,
-      name: row.name,
-      children: children,
-    };
-  }));
+  const res = await pool.query(query, params);
+  const tree = await Promise.all(
+    res.rows.map(async (row) => {
+      const children = await getTreeData(level + 1, row.id);
+      return {
+        id: row.id,
+        name: row.name,
+        children: children,
+      };
+    })
+  );
   return tree;
 }
 
@@ -126,10 +158,10 @@ app.post("/api/upsert", async (req, res) => {
   }
 });
 
-// 捕获所有其他路由  
-app.get('*', (req, res) => {  
-    res.status(404).send('Not Found');  
-}); 
+// 捕获所有其他路由
+app.get("*", (req, res) => {
+  res.status(404).send("Not Found");
+});
 
 // 启动服务器
 app.listen(port, () => {
