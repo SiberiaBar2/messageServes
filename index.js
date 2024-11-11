@@ -296,6 +296,69 @@ app.post("/api/editNode", async (req, res) => {
   }
 });
 
+// 删除节点及其所有子节点接口
+app.post("/api/deleteNode", async (req, res) => {
+  const { id } = req.body;
+
+  // 检查是否传入了 id
+  if (!id) {
+    return res
+      .status(400)
+      .json({ error: "参数错误，必须提供 id", ...ERRORCONFIG });
+  }
+
+  try {
+    // 找到节点对应的层级
+    let level = 0;
+    for (let i = 1; i <= 10; i++) {
+      const query = `SELECT * FROM level${i} WHERE id = $1`;
+      const result = await pool.query(query, [id]);
+      if (result.rows.length > 0) {
+        level = i;
+        break;
+      }
+    }
+
+    if (level === 0) {
+      return res.status(400).json({ error: "无效的 id", ...ERRORCONFIG });
+    }
+
+    // 递归删除节点及其子节点
+    await deleteNodeAndChildren(level, id);
+
+    res.json({ message: "节点及其所有子节点删除成功", ...SUCCESSCONFIG });
+  } catch (err) {
+    res.status(500).json({ error: err.message, ...ERRORCONFIG });
+  }
+});
+
+// 递归删除节点及其子节点的辅助函数
+async function deleteNodeAndChildren(level, parentId) {
+  if (level >= 10) return; // 超过最大层级，不再递归
+
+  const currentTable = `level${level}`;
+  const nextTable = `level${level + 1}`;
+  const foreignKey = `level${level}_id`;
+
+  try {
+    // 查询当前节点的子节点
+    const query = `SELECT id FROM ${nextTable} WHERE ${foreignKey} = $1`;
+    const result = await pool.query(query, [parentId]);
+
+    // 递归删除所有子节点
+    for (const row of result.rows) {
+      await deleteNodeAndChildren(level + 1, row.id);
+    }
+
+    // 删除当前节点
+    const deleteQuery = `DELETE FROM ${currentTable} WHERE id = $1`;
+    await pool.query(deleteQuery, [parentId]);
+  } catch (error) {
+    console.error(`Error deleting nodes at level ${level}: ${error.message}`);
+    throw error;
+  }
+}
+
 app.get("*", (req, res) => {
   res.status(404).send("Not Found");
 });
