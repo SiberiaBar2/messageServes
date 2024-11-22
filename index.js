@@ -298,39 +298,67 @@ app.post("/api/editNode", async (req, res) => {
 
 // 删除节点及其所有子节点接口
 app.post("/api/deleteNode", async (req, res) => {
-  const { id } = req.body;
+  const { ids } = req.body;
 
-  // 检查是否传入了 id
-  if (!id) {
-    return res
-      .status(400)
-      .json({ error: "参数错误，必须提供 id", ...ERRORCONFIG });
+  // 检查是否传入了 id 数组
+  if (!Array.isArray(ids) || ids.length === 0) {
+    return res.status(400).json({
+      error: "参数错误，必须提供非空的 id 数组",
+      ...ERRORCONFIG,
+    });
   }
 
   try {
-    // 找到节点对应的层级
-    let level = 0;
-    for (let i = 1; i <= 10; i++) {
-      const query = `SELECT * FROM level${i} WHERE id = $1`;
-      const result = await pool.query(query, [id]);
-      if (result.rows.length > 0) {
-        level = i;
-        break;
-      }
-    }
+    // 并行处理所有 id 的删除操作，使用 Promise.allSettled 捕获每个任务的结果
+    const results = await Promise.allSettled(ids.map((id) => deleteIds(id)));
 
-    if (level === 0) {
-      return res.status(400).json({ error: "无效的 id", ...ERRORCONFIG });
-    }
+    // 收集成功和失败的结果
+    const successes = results
+      .filter((result) => result.status === "fulfilled")
+      .map((result) => result.value);
+    const failures = results
+      .filter((result) => result.status === "rejected")
+      .map((result) => result.reason.message || result.reason);
 
-    // 递归删除节点及其子节点
-    await deleteNodeAndChildren(level, id);
-
-    res.json({ message: "节点及其所有子节点删除成功", ...SUCCESSCONFIG });
+    // 返回删除操作的总体结果
+    res.json({
+      message: "批量删除操作已完成",
+      successes,
+      failures,
+      ...SUCCESSCONFIG,
+    });
   } catch (err) {
     res.status(500).json({ error: err.message, ...ERRORCONFIG });
   }
 });
+
+// 删除单个节点及其所有子节点
+const deleteIds = async (id) => {
+  if (!id) {
+    throw new Error("参数错误，必须提供 id");
+  }
+
+  // 查找节点所在的层级
+  let level = 0;
+  for (let i = 1; i <= 10; i++) {
+    const query = `SELECT * FROM level${i} WHERE id = $1`;
+    const result = await pool.query(query, [id]);
+    if (result.rows.length > 0) {
+      level = i;
+      break;
+    }
+  }
+
+  if (level === 0) {
+    throw new Error(`无效的 id: ${id}`);
+  }
+
+  // 删除节点及其子节点
+  await deleteNodeAndChildren(level, id);
+
+  return `节点 ${id} 及其子节点删除成功`;
+};
+
 
 // 递归删除节点及其子节点的辅助函数
 async function deleteNodeAndChildren(level, parentId) {
